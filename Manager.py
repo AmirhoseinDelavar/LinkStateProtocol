@@ -11,9 +11,13 @@ PROJECT_PATH = 'D:/Uni-Courses/Network/Final-Pro/'
 MAX_COST = 99
 PORTS_START = 65432
 
+# shared vars
+routers_cnt = 0
 manager_tcp_shared = []
 routers_acked_l = threading.Lock()
+routers_safe_l = threading.Lock()
 routers_acked = 0
+routers_safe = 0
 log_f = 0
 
 def router(id):
@@ -24,6 +28,14 @@ def router(id):
     n_udp_ip = []
     # list of udp sockets
     socs = []
+    # distance vector for topology
+    d_dic = {}
+    d = []
+    # visited routers from LSP
+    visited_s = [0 for i in range(routers_cnt)]
+    visited_all = False
+    # forwarding table
+    ft = []
     f = open('router{0}.txt'.format(id), 'a')
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -32,13 +44,8 @@ def router(id):
         # send UDP port to manager
         s.sendall(bytes(PORTS_START - id - 1))
         # get connectivity table
-        neighbors = s.recv(1024)
+        neighbors = list(s.recv(1024))
         f.write('Connectivity Table: ' + repr(list(neighbors)) + '\n')
-        f.flush()
-        # send ready sig to manager
-        s.sendall(b'ready')
-        status = s.recv(1024)
-        f.write('Status From Manager: ' + repr(str(status)) + '\n')
         f.flush()
         # cal neighbors udp_port
         for index, val in enumerate(neighbors):
@@ -50,7 +57,12 @@ def router(id):
         # setup router server udp
         soc = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
         soc.bind((udp_ip, udp_port))
-        # setup udp connection
+        # send ready sig to manager
+        s.sendall(b'ready')
+        status = s.recv(1024)
+        f.write('Status From Manager: ' + repr(str(status)) + '\n')
+        f.flush()
+        # setup udp connections
         for ip,port in zip(n_udp_ip,n_udp_port):
             soc_t = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
             # Listen for incoming datagrams
@@ -67,6 +79,26 @@ def router(id):
         f.flush()
 
         # send LSP to all neighbors
+        d_dic[id] = list(neighbors)
+        for soc_t,ip,port in zip(socs,n_udp_ip,n_udp_port):
+            t_list = neighbors.copy()
+            t_list.append(id)
+            soc_t.sendto(bytes(t_list), (ip, port))
+        f.write('Send LSP To Neighbors\n')
+        f.flush()
+        while True:
+            resp = list(soc.recvfrom(1024)[0])
+            neigh_id = resp.pop()
+            if neigh_id not in d_dic.keys():
+                d_dic[neigh_id] = resp
+            resp.append(neigh_id)
+            for soc_t,ip,port in zip(socs,n_udp_ip,n_udp_port):
+                soc_t.sendto(bytes(resp), (ip, port))
+            if len(d_dic.items()) == routers_cnt:
+                break
+        f.write(str(d_dic) + '\n')
+        f.flush()
+        # receive and resend LSP to all neighbors
 
     except Exception as e:
         print(e.with_traceback())
@@ -75,6 +107,8 @@ def manager_tcp(i):
     global routers_acked
     global manager_tcp_shared
     global routers_acked_l
+    global routers_safe
+    global routers_safe_l
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(('127.0.0.1', PORTS_START + i))
     s.listen()
@@ -92,6 +126,11 @@ def manager_tcp(i):
 
         # send safety message
         ready_sig = conn.recv(1024)
+        routers_safe_l.acquire()
+        routers_safe -= 1
+        routers_safe_l.release()
+        while routers_safe != 0:
+            pass
         conn.sendall(b'safe')
         log_f.write('Safe for R {0}\n'.format(i))
         log_f.flush()
@@ -115,6 +154,8 @@ def manager_tcp(i):
 def main():
     global manager_tcp_shared
     global routers_acked
+    global routers_cnt
+    global routers_safe
     # keeping distances
     d = []
     # routers ip and ports
@@ -124,8 +165,6 @@ def main():
     t = []
     # TCP Sockets to Routers
     tcp_s = []
-    # routers counts
-    routers_cnt = 0
     # packets send list
     orders = []
     # log file for manager
@@ -134,6 +173,7 @@ def main():
     with open('config.txt') as f:
         routers_cnt = int(f.readline())
         routers_acked = routers_cnt
+        routers_safe = routers_cnt
         d = [[MAX_COST if i != j else 0 for i in range(routers_cnt)] for j in range(routers_cnt)]
 
         for line in f.readlines():
