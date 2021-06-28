@@ -22,6 +22,20 @@ routers_safe = 0
 log_f = 0
 man_order = {}
 
+def router_tranmiter(soc,f,ft,n_udp_port,socs,n_udp_ip):
+    packet = list(soc.recvfrom(1024)[0])
+    if packet[1] == id:
+        f.write('Packet rec from' + str(packet[2]) + ' ' + '\n')
+        f.flush()
+    else:
+        next_id = ft[packet[1]][0]
+        print(next_id)
+        next_port = PORTS_START - next_id - 1
+        next_index = n_udp_port.index(next_port)
+        socs[next_index].sendto(bytes(packet), (n_udp_ip[next_index], next_port))
+        f.write('Transit Packet ' + str(packet[2]) + ' to ' + str(packet[1]) + '\n')
+        f.flush()
+
 
 def dijkstra(graph, src, dest, visited, distances, predecessors):
     """ calculates a shortest path tree routed in src
@@ -168,31 +182,43 @@ def router(id):
         f_spt.close()
         # resend received packet
         # send or quit order from manager
+        # newt = threading.Thread(target=router_tranmiter, args=(soc,f,ft,n_udp_port,socs,n_udp_ip,), daemon=True)
+        # newt.start()
+        s.settimeout(0.1)
+        soc.settimeout(0.1)
         while True:
-            order = str(s.recv(1024))
-            if order == b'quit':
-                break
-            else:
-                dest_id = int(order)
-                next_id = ft[dest_id][0]
-                next_port = PORTS_START - next_id - 1
-                next_index = n_udp_port.index(next_port)
-                packet = ["data", dest_id, id]
-                socs[next_index].sendto(bytes(packet), (n_udp_ip[next_index], next_port))
-                f.write('Start Transmission Packet ' + str(id) + ' to ' + str(dest_id) + '\n')
-                f.flush()
+            try:
+                order = s.recv(1024)
+                if int(bytes.decode(order, encoding='UTF-8')) == MAX_COST:
+                    f.write('Quit' + str(id) + '\n')
+                    f.flush()
+                    break
+                else:
+                    dest_id = int(bytes.decode(order, encoding='UTF-8'))
+                    next_id = ft[dest_id][0]
+                    next_port = PORTS_START - next_id - 1
+                    next_index = n_udp_port.index(next_port)
+                    packet = [223, dest_id, id]
+                    socs[next_index].sendto(bytes(packet), (n_udp_ip[next_index], next_port))
+                    f.write('Start Transmission Packet ' + str(id) + ' to ' + str(dest_id) + '\n')
+                    f.flush()
+            except Exception as e:
+                pass
+            try:
+                packet = list(soc.recvfrom(1024)[0])
+                if packet[1] == id:
+                    f.write('Packet rec from' + str(packet[2]) + ' ' + '\n')
+                    f.flush()
+                else:
+                    next_id = ft[packet[1]][0]
+                    next_port = PORTS_START - next_id - 1
+                    next_index = n_udp_port.index(next_port)
+                    socs[next_index].sendto(bytes(packet), (n_udp_ip[next_index], next_port))
+                    f.write('Transit Packet ' + str(packet[2]) + ' to ' + str(packet[1]) + '\n')
+                    f.flush()
+            except Exception as e:
+                pass
 
-            packet = list(soc.recvfrom(1024)[0])
-            if packet[1] == id:
-                f.write('Packet rec from' + str(packet[2]) + ' ' + '\n')
-                f.flush()
-            else:
-                next_id = ft[packet[1]][0]
-                next_port = PORTS_START - next_id - 1
-                next_index = n_udp_port.index(next_port)
-                socs[next_index].sendto(bytes(packet), (n_udp_ip[next_index], next_port))
-                f.write('Transit Packet ' + str(packet[2]) + ' to ' + str(packet[1]) + '\n')
-                f.flush()
 
         # closing thread
         soc.close()
@@ -251,14 +277,13 @@ def manager_tcp(i):
         # send order to dest
         while i not in man_order.keys():
             pass
-        print("here")
-        conn.sendall(bytes(man_order[i], encoding='UTF-8'))
-        log_f.write('Send Order R {0}\n msg {1}'.format(i, man_order[i]))
+        conn.sendall(str(man_order[i]).encode())
+        log_f.write('Send Order R {0} msg {1}\n'.format(i, man_order[i]))
         log_f.flush()
-        time.sleep(0.001)
+        time.sleep(5.005)
         # send quit
-        conn.sendall(bytes(man_order[i], encoding='UTF-8'))
-        log_f.write('Send Order R {0}\n msg {1}'.format(i, man_order[i]))
+        conn.sendall(str(man_order[i]).encode())
+        log_f.write('Send Order R {0} msg {1}\n'.format(i, man_order[i]))
         log_f.flush()
     except Exception as e:
         print(e.with_traceback())
@@ -329,10 +354,10 @@ def main():
     for order in orders:
         man_order[order[0]] = order[1]
     print(man_order)
-    time.sleep(0.005)
+    time.sleep(5)
     # send quit order
     for order in orders:
-        man_order[order[0]] = 'quit'
+        man_order[order[0]] = MAX_COST
     time.sleep(0.005)
 
     while True:
